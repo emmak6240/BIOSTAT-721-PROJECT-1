@@ -1,0 +1,272 @@
+---
+title: "BIOSTAT 721: Project 1"
+author: "Emma Kuok"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+## DISCLOSURE: 
+This project consist of reference of AI (e.g: Claude, Google LM) in order to review whether my pseudocode process is in its appropriate use,  assistance with debugging, and confirming in using the necessary libraries for the project. 
+
+```{r find my versions, include = FALSE}
+#finding my R version
+R.version.string
+
+#finding the versions for the R Packages used for this project
+target_packages <- c(
+  "gtsummary", "gt", "lubridate",
+  "dplyr", "tidyverse", "here", "lintr"
+)
+sapply(target_packages, packageVersion)
+```
+
+#### RCODE VERSION:
+R version 4.6.1 (2026-06-24 ucrt)
+
+#### R PACKAGE VERSIONS:
+**gt**: 1.3.0 ; **gtsummary**: 2.6.1; **lubridate**: 1.9.5; **dplyr**: 1.2.1; **tidyverse**: 2.0.0; **here**: 1.0.2; **lintr**: 3.4.0
+
+### Pseudocode:
+1. **Load the following libraries** : dplyr, tidyverse, lubridate, gt, lintr, here, and gtsummary, and import both CSV files with relative paths.
+2. **Merge**: confirm MRNs are unique in the patient file, then merge on MRN so each encounter carries its patient’s information. Convert dates with mdy() for consistency.
+3. **Check data quality**: missing values per variable, ranges (temperature, BMI, distress score, WBC, DOB), duplicate rows, and category spellings.
+4. **Clean**: recode BMI = -989 and DOB before 1900 to NA; leave other missing values as NA.
+5. **WBC**: set values below 1 to 1, then create the categories (Low, Normal, High, Not Taken) as a factor in logical order.
+6. **WBC table**: counts (%) of encounters per category, built with gt and gt summary
+7. **Table 1**: take each patient’s first encounter, order the categories, and show counts (%) of race, ethnicity, financial class, hypertension, CHF, and diabetes.
+8. **Finalize**: knit with code hidden, tables on one page, R and package versions noted.
+
+
+```{r, include = FALSE}
+#loading the necessary libraries for this project
+library(tidyverse)
+library(dplyr)
+library(gt)
+library(gtsummary)
+library(lubridate)
+library(lintr)
+library(here)
+
+#importing the datasets into R
+patient <- readr::read_csv(here::here("PatientData-2.csv"))
+encounter <- readr::read_csv(here::here("EncounterData-2.csv"))
+
+#getting the overview of what the program looks like
+head(patient)
+head(encounter)
+
+#merging the two data together through MRN (patient id)
+total_data <- merge(patient, encounter, by = "MRN")
+
+#make sure the dates of contact are consistent
+total_data <- total_data |>
+  mutate(contact_date = mdy(contact_date), DOB = mdy(DOB))
+
+#see if there are any duplicates in MRN after merging and
+#compare if the rows between the two initial
+#datasets are consistent
+
+#seeing the rows for the patient file
+nrow(patient)
+
+#seeing the rows for the encounter file
+nrow(encounter)
+
+#seeing the rows for the total file
+nrow(total_data)
+
+#confirm the unique IDs present
+length(unique(total_data$MRN))
+```
+
+```{r, include = FALSE}
+#Finding the Granularity
+nrow(total_data)
+
+#Finding the Dimensions
+dim(total_data)
+
+#Getting the Details of the variables and the MRN values
+names(total_data)
+length(unique(total_data$MRN))
+```
+### Granularity, Dimensions, and Description of Variables:
+The analytic data set consist **550 row** to indicate the patient's hospital encounter  (office visit, ED visit, or hospitalization) consist of **50 unique patients**. There are total of **14 variables** present in the data set, consist in two categories: patient information, and patient visit encounter information. Patient-level variables that are repeated across each patient’s encounters, include the medical record number (MRN), demographics (date of birth, race, ethnicity), insurance type (financial class), and health-outcomes (hypertension, congestive heart failure, diabetes). Encounter-level variables include the contact date, encounter type, and clinical measures: temperature, distress score, BMI, and white blood cell count (WBC).  
+
+```{r, include = FALSE}
+#checking for missing values in totalData
+colSums(is.na(total_data))
+
+#checking for implausible data to see how the values
+#are distributed across totalData
+#found "-989" for BMI and DOB year labeled "1889"
+summary(total_data)
+
+#see how many BMI's are labeled as "-989" (which is implausible)
+sum(total_data$BMI == -989, na.rm = TRUE)  #there are 6
+
+#see how many DOB years are labeled <1900 (which is implausible)
+sum(year(total_data$DOB) < 1900, na.rm = TRUE) #there are 17
+```
+### Missing Data and Implausible Data: 
+- WBC and patient information: no missing data (except DOB being implausible);
+- Distress_score: 53 encounters missing which will remain as NA;
+- BMI: 86 encounters are missing. Hence, will take it as NA;
+- BMI (-989): there are 6 values for BMI that are -989 which is implausible, and will convert it to NA.
+- DOB: there are 17 encounters (1 patient) have a DOB before 1900 (1 patient) that are labeled to be less than 1900 (Ex: one patient's DOB is labeled "1889-07-22"), which is implausible at this moment since the office visits happen between 2014-2019 (and the patient will be over 100 years by the moment). Therefore, the DOB with years <1900 will be converted to NA.
+
+```{r, include = FALSE}
+#changing BMI = -989 to NA as -989 is implausible
+total_data <- total_data |>
+  mutate(BMI = na_if(BMI, -989))
+
+#confirming whether the 6 implausible values are converted:
+#86 initial NA + 6 implausible values = 92 total NAs
+summary(total_data$BMI)
+
+#changing the DOB year of "1889" to NA as it is implausible at this moment
+total_data |> filter(year(DOB) < 1900) |> distinct(MRN) |> nrow()
+
+#confirming whether the 17 implausible encounters in
+#patient's DOB are converted:
+# show 17 NAs total with newly modified DOB
+#ranging from: 1948-04-11 to 1999-06-05
+summary(total_data$DOB)
+```
+
+
+```{r, include = FALSE}
+#calculate how many WBC levels are <1
+#==> 14 WBC values were below 1
+sum(encounter$WBC < 1, na.rm = TRUE)
+
+#Convert the WBC levels from numerical values
+#into categories (Low, Normal, High, Not Taken)
+#and converting any WBC levels that are <1 to 1
+total_data <- total_data |>
+  mutate(WBC = if_else(WBC < 1, 1, WBC),
+    #establishing the categories
+    WBC_categorize = case_when(
+      is.na(WBC) ~ "Not Taken",
+      WBC < 3.2  ~ "Low",
+      WBC <= 9.8 ~ "Normal",
+      WBC > 9.8  ~ "High"
+    ),
+    #organizing the levels of categories
+    WBC_categorize = factor(WBC_categorize,
+                            levels = c("Low", "Normal",
+                                       "High", "Not Taken"))
+  )
+total_data
+```
+
+```{r, echo = FALSE}
+#Establishing my table for WBC levels
+wbc_tbl <- total_data |>
+  select(WBC_categorize) |>
+  tbl_summary(
+              statistic = all_categorical() ~ "{n}       ({p}%)") |>
+  modify_header(label ~ "**WBC category**", stat_0 ~ "**Samples (%)**") |>
+  modify_table_body(~ .x |>
+                      # removes the "WBC_categorize" row
+                      filter(row_type != "label")) |>
+  # removes the "1" footnote marker
+  modify_footnote(all_stat_cols() ~ NA)
+
+```
+
+```{r, echo = FALSE}
+#Establishing my table for WBC count in
+#its categorical order
+wbc_tbl |>
+  as_gt() |>
+  gt::tab_header(
+    title = "White Blood Cell (WBC) Count Category",
+    subtitle = paste0("Counts (%) of WBC samples: n = ",
+      nrow(total_data)
+    )
+  )
+```
+
+```{r, include = FALSE}
+#generating a separate table that extracts
+#the necessary information from totalData:
+#MRN, race, ethnicity, Financial Class,
+#Hypertension, CHF, diabetes)
+
+patient_info <- total_data |>
+  arrange(MRN, contact_date) |>
+  group_by(MRN) |>
+  slice(1) |>
+  ungroup() |>
+  select(MRN, race, ethnicity, financialclass,
+         hypertension, CHF, diabetes)
+
+#Since the data consist of patient information
+#from multiple encounter visits, we want to get
+#the set of distinctive patients present in
+#the dataset
+distinct_patients <- distinct(patient_info)
+
+#Reorganize the order of ethnicity ranging
+#from the largest ethnicity size to the
+#smallest ethnicity size
+distinct_patients <- distinct_patients |>
+  mutate(race = factor(race, levels = c("White", "Black", "Other")))
+
+#Organize the binary results (Y/N) to ("Yes"/"No")
+distinct_patients <- distinct_patients |>
+  mutate(across(c(hypertension, CHF, diabetes),
+                ~ factor(.x, levels = c("Y", "N"),
+                         labels = c("Yes", "No"))))
+
+#Making consistency with the capitalization
+#with Hispanic and "N"on-Hispanic
+distinct_patients <- distinct_patients |>
+  mutate(ethnicity = factor(ethnicity,
+                            levels = c("non-Hispanic", "Hispanic"),
+                            labels = c("Non-Hispanic", "Hispanic")))
+
+#generating the table with the corresponding
+#variables for table
+table1 <- distinct_patients |>
+  select(race, ethnicity, financialclass,
+         hypertension, CHF, diabetes) |>
+  tbl_summary(
+    type = list(hypertension ~ "categorical",
+                CHF ~ "categorical",
+                diabetes ~ "categorical"),
+    label = list(
+      race ~ "Race",
+      ethnicity ~ "Ethnicity",
+      financialclass ~ "Financial class",
+      hypertension ~ "Hypertension",
+      CHF ~ "Congestive heart failure",
+      diabetes ~ "Diabetes"
+    ),
+    missing = "ifany",
+    statistic = all_categorical() ~ "{n}       ({p}%)"
+  ) |>
+  modify_header(
+                label ~ "**Characteristics**",
+                stat_0 ~ "**Number of Patients (%)**") |>
+  # removes the "1" footnote
+  modify_footnote(all_stat_cols() ~ NA)
+
+```
+
+```{r, echo = FALSE}
+#Create Table 1
+table1 |>
+  as_gt() |>
+  gt::tab_header(title = "Table 1",
+                 subtitle = paste0("Counts (%) of patients, n = ",
+                                   nrow(distinct_patients)))
+```
+
+
